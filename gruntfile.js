@@ -12,7 +12,7 @@ module.exports = function (grunt) {
           transpile: { presets: ['@babel/preset-env'] },
           sourceMap: true
         },
-        src: ['client/*.coffee', 'test/*.coffee', 'server/*.coffee'],
+        src: ['client/*.coffee', 'test/*.coffee'],
         ext: '.js'
       }
     },
@@ -29,7 +29,7 @@ module.exports = function (grunt) {
 
     watch: {
       all: {
-        files: ['client/*.coffee', 'test/*.coffee', 'server/*.coffee'],
+        files: ['client/*.coffee', 'test/*.coffee'],
         tasks: ['coffee','mochaTest']
       }
     }

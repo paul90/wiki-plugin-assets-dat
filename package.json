@@ -1,6 +1,6 @@
 {
-  "name": "wiki-plugin-assets",
-  "version": "0.2.4",
+  "name": "@paul90/wiki-plugin-assets-dat",
+  "version": "20.06.03",
   "description": "Federated Wiki - Assets Plugin",
   "keywords": [
     "assets",
@@ -31,13 +31,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/fedwiki/wiki-plugin-assets.git"
+    "url": "https://github.com/paul90/wiki-plugin-assets-dat.git"
   },
   "bugs": {
-    "url": "https://github.com/fedwiki/wiki-plugin-assets/issues"
+    "url": "https://github.com/paul90/wiki-plugin-assets-dat/issues"
   },
   "engines": {
-    "node": ">=0.10"
+    "node": ">=12"
   },
   "dependencies": {
     "async": "^2.6.0",

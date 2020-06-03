@@ -20,34 +20,35 @@ context = ($item) ->
       sites.push action.site
   sites
 
-post_upload = ($item, item, form) ->
-  $progress = $item.find '.progress-bar'
+prepareAssetFolder = (path) ->
+  await wiki.archive.mkdir(path)
+  .then () ->
+    return true
+  .catch (error) ->
+    if error.toString().startsWith('ParentFolderDoesntExistError')
+      nextPath = path.substring(0, path.lastIndexOf('/'))
+      await prepareAssetFolder(nextPath)
+      await prepareAssetFolder(path)
 
-  tick = (e) ->
-    return unless e.lengthComputable
-    percentComplete = e.loaded / e.total
-    percentComplete = parseInt(percentComplete * 100)
-    $progress.text "#{percentComplete}%"
-    $progress.width "#{percentComplete}%"
 
-  $.ajax
-    url: '/plugin/assets/upload'
-    type: 'POST'
-    data: form
-    processData: false
-    contentType: false
-    success: ->
-      $item.empty()
-      emit $item, item
-      bind $item, item
-    error: (e) ->
-      console.log 'error', e
-      $progress.text "upload error: #{e.statusText} #{e.responseText||''}"
-      $progress.width '100%'
-    xhr: ->
-      xhr = new XMLHttpRequest
-      xhr.upload.addEventListener 'progress', tick, false
-      xhr
+post_upload = ($item, item, assets, files) ->
+  return unless files?.length
+
+  assetFolder = ["/wiki/assets", assets].join('/')
+  await prepareAssetFolder(assetFolder)
+  for file in files
+    reader = new FileReader()
+    reader.onload = () ->
+      filePath = [assetFolder, file.name].join('/')
+      await wiki.archive.writeFile(filePath, reader.result)
+      .then () ->
+        $item.empty()
+        emit $item, item
+        bind $item, item
+      .catch (error) ->
+        console.log "Error saving asset", filePath, error
+        $progress.text "Error: #{error}"
+    reader.readAsArrayBuffer(file)
 
 get_file = ($item, item, url, success) ->
   assets = item.text.match(/([\w\/-]*)/)[1]
@@ -61,31 +62,26 @@ get_file = ($item, item, url, success) ->
       { type: blob.type }
     )
 
-    form = new FormData()
-    form.append 'assets', assets
-    form.append 'uploads[]', file, file.name
-    success form
+    success assets, file
   ).catch((e) ->
-    $progress = $item.find '.progress-bar'
     $progress.text "Copy error: #{e.message}"
-    $progress.width '100%'
   )
 
 
 delete_file = ($item, item, url) ->
   file = url.split('/').reverse()[0]
   assets = item.text
-  $.ajax
-    url: "/plugin/assets/delete?file=#{file}&assets=#{assets}"
-    type: 'POST'
-    success: () ->
-      $item.empty()
-      emit $item, item
-      bind $item, item
-    error: (e) ->
-      $progress = $item.find '.progress-bar'
-      $progress.text "Delete error: #{e.statusText} #{e.responseText||''}"
-      $progress.width '100%'
+  assetFolder= ["/wiki/assets", assets].join('/')
+  filePath = [assetFolder, file].join('/')
+  await wiki.archive.unlink filePath
+  .then () ->
+    $item.empty()
+    emit $item, item
+    bind $item, item
+  .catch (error) ->
+    console.log "Error deleting asset", filePath, error
+    $progress.text "Delete error: #{e.statusText} #{e.responseText||''}"
+
 
 fetch_list = ($item, item, $report, assets, remote) ->
   requestSite = if remote? then remote else null
@@ -117,8 +113,8 @@ fetch_list = ($item, item, $report, assets, remote) ->
 
     $report.find('button.copy').click (e) ->
       href = $(e.target).parent().find('a').attr('href')
-      get_file $item, item, href, (form) ->
-        post_upload $item, item, form
+      get_file $item, item, href, (assets, files) ->
+        post_upload $item, item, assets, files
 
     $report.find('button.delete').click (e) ->
       href = $(e.target).parent().find('a').attr('href')
@@ -127,12 +123,24 @@ fetch_list = ($item, item, $report, assets, remote) ->
   trouble = (e) ->
     $report.text "plugin error: #{e.statusText} #{e.responseText||''}"
 
-  $.ajax
-    url: wiki.site(requestSite).getURL('plugin/assets/list')
-    data: {assets}
-    dataType: 'json'
-    success: render
-    error: trouble
+  if assetsURL is '/assets' or assetsURL.protocol? is "hyper:"
+    try
+      assetsDir = "/wiki/assets/" + assets
+      assetList = await wiki.archive.readdir(assetsDir, {includeStats: true})
+      assetFiles = []
+      assetList.forEach (asset) ->
+        if asset.stat.isFile()
+          assetFiles.push(asset.name)
+      render({error: null, files: assetFiles})
+    catch error
+      render({error: {code: 'ENOENT'}})
+  else
+    $.ajax
+      url: wiki.site(requestSite).getURL('plugin/assets/list')
+      data: {assets}
+      dataType: 'json'
+      success: render
+      error: trouble
 
 emit = ($item, item) ->
   uploader = ->
@@ -152,8 +160,12 @@ emit = ($item, item) ->
 
   assets = item.text.match(/([\w\/-]*)/)[1]
   for site in context $item
+    if site.length is 64
+      siteName = site.slice(0,6) +  '..' + site.slice(-2)
+    else
+      siteName = site
     $report = $item.find('dl').prepend """
-      <dt><img width=12 src="#{wiki.site(site).flag()}"> #{site}</dt>
+      <dt><img width=12 src="#{wiki.site(site).flag()}"> #{siteName}</dt>
       <dd style="margin:8px;"></dd>
     """
     fetch_list $item, item, $report.find('dd:first'), assets, site
@@ -181,11 +193,7 @@ bind = ($item, item) ->
 
   upload = (files) ->
     return unless files?.length
-    form = new FormData()
-    form.append 'assets', assets
-    for file in files
-      form.append 'uploads[]', file, file.name
-    post_upload $item,item,form
+    post_upload $item,item, assets, files
 
 window.plugins.assets = {emit, bind} if window?
 module.exports = {expand} if module?
