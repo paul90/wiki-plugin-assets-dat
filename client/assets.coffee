@@ -61,8 +61,8 @@ get_file = ($item, item, url, success) ->
       filename,
       { type: blob.type }
     )
-
-    success assets, file
+    # post_upload expects a list of files, so put our file into a list
+    success assets, [file]
   ).catch((e) ->
     $progress.text "Copy error: #{e.message}"
   )
@@ -123,7 +123,7 @@ fetch_list = ($item, item, $report, assets, remote) ->
   trouble = (e) ->
     $report.text "plugin error: #{e.statusText} #{e.responseText||''}"
 
-  if assetsURL is '/assets' or assetsURL.protocol? is "hyper:"
+  if assetsURL is '/wiki/assets'
     try
       assetsDir = "/wiki/assets/" + assets
       assetList = await wiki.archive.readdir(assetsDir, {includeStats: true})
@@ -131,6 +131,17 @@ fetch_list = ($item, item, $report, assets, remote) ->
       assetList.forEach (asset) ->
         if asset.stat.isFile()
           assetFiles.push(asset.name)
+      render({error: null, files: assetFiles})
+    catch error
+      render({error: {code: 'ENOENT'}})
+  else if assetsURL.protocol? is "hyper:"
+    try
+      assetsURL = "hyper://"+ requestSite + "/wiki/assets/" + assets
+      assetList = await beaker.hyperdrive.readdir(assetsURL, {includeStats: true})
+      assetFiles =[]
+      assetList.forEach (asset) ->
+      if asset.stat.isFile()
+        assetFiles.push(asset.name)
       render({error: null, files: assetFiles})
     catch error
       render({error: {code: 'ENOENT'}})
