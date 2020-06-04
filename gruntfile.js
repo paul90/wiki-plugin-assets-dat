@@ -16,16 +16,6 @@ module.exports = function (grunt) {
       }
     },
 
-    mochaTest: {
-      test: {
-        options: {
-          reporter: 'spec'
-        },
-        src: ['test/**/*.js']
-      }
-    },
-
-
     watch: {
       all: {
         files: ['client/*.coffee', 'test/*.coffee'],

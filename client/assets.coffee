@@ -5,6 +5,10 @@ expand = (text)->
     .replace /</g, '&lt;'
     .replace />/g, '&gt;'
 
+ignore = (e) ->
+  e.preventDefault()
+  e.stopPropagation()
+
 context = ($item) ->
   sites = [location.host]
   if remote = $item.parents('.page').data('site')
@@ -16,7 +20,70 @@ context = ($item) ->
       sites.push action.site
   sites
 
-fetch = ($report, assets, remote) ->
+prepareAssetFolder = (path) ->
+  await wiki.archive.mkdir(path)
+  .then () ->
+    return true
+  .catch (error) ->
+    if error.toString().startsWith('ParentFolderDoesntExistError')
+      nextPath = path.substring(0, path.lastIndexOf('/'))
+      await prepareAssetFolder(nextPath)
+      await prepareAssetFolder(path)
+
+
+post_upload = ($item, item, assets, files) ->
+  return unless files?.length
+
+  assetFolder = ["/wiki/assets", assets].join('/')
+  await prepareAssetFolder(assetFolder)
+  for file in files
+    reader = new FileReader()
+    reader.onload = () ->
+      filePath = [assetFolder, file.name].join('/')
+      await wiki.archive.writeFile(filePath, reader.result)
+      .then () ->
+        $item.empty()
+        emit $item, item
+        bind $item, item
+      .catch (error) ->
+        console.log "Error saving asset", filePath, error
+        $progress.text "Error: #{error}"
+    reader.readAsArrayBuffer(file)
+
+get_file = ($item, item, url, success) ->
+  assets = item.text.match(/([\w\/-]*)/)[1]
+  filename = url.split('/').reverse()[0]
+  fetch(url).then((response) ->
+    response.blob()
+  ).then((blob) ->
+    file = new File(
+      [blob],
+      filename,
+      { type: blob.type }
+    )
+
+    success assets, file
+  ).catch((e) ->
+    $progress.text "Copy error: #{e.message}"
+  )
+
+
+delete_file = ($item, item, url) ->
+  file = url.split('/').reverse()[0]
+  assets = item.text
+  assetFolder= ["/wiki/assets", assets].join('/')
+  filePath = [assetFolder, file].join('/')
+  await wiki.archive.unlink filePath
+  .then () ->
+    $item.empty()
+    emit $item, item
+    bind $item, item
+  .catch (error) ->
+    console.log "Error deleting asset", filePath, error
+    $progress.text "Delete error: #{e.statusText} #{e.responseText||''}"
+
+
+fetch_list = ($item, item, $report, assets, remote) ->
   requestSite = if remote? then remote else null
   assetsURL = wiki.site(requestSite).getDirectURL('assets')
   if assetsURL is ''
@@ -24,7 +91,16 @@ fetch = ($report, assets, remote) ->
     return
 
   link = (file) ->
-    """<a href="#{assetsURL}/#{if assets is '' then "" else assets + "/"}#{encodeURIComponent file}" target=_blank>#{expand file}</a>"""
+    href = "#{assetsURL}/#{if assets is '' then "" else assets + "/"}#{encodeURIComponent file}"
+    # todo: no action if not logged on
+    act = unless isOwner
+      ''
+    else if remote != location.host
+      '<button class="copy">⚑</button> '
+    else
+      '<button class="delete">✕</button> '
+    
+    """<span>#{act}<a href="#{href}" target=_blank>#{expand file}</a></span>"""
 
   render = (data) ->
     if data.error
@@ -35,15 +111,22 @@ fetch = ($report, assets, remote) ->
       return $report.text "no files"
     $report.html (link file for file in files).join "<br>"
 
+    $report.find('button.copy').click (e) ->
+      href = $(e.target).parent().find('a').attr('href')
+      get_file $item, item, href, (assets, files) ->
+        post_upload $item, item, assets, files
+
+    $report.find('button.delete').click (e) ->
+      href = $(e.target).parent().find('a').attr('href')
+      delete_file $item, item, href
+
   trouble = (e) ->
     $report.text "plugin error: #{e.statusText} #{e.responseText||''}"
 
-  if assetsURL is "/assets" or assetsURL.protocol? is "dat:"
-    # either our, or another dat wiki's assets
+  if assetsURL is '/assets' or assetsURL.protocol? is "hyper:"
     try
-
       assetsDir = "/wiki/assets/" + assets
-      assetList = await wiki.archive.readdir(assetsDir, {stat: true})
+      assetList = await wiki.archive.readdir(assetsDir, {includeStats: true})
       assetFiles = []
       assetList.forEach (asset) ->
         if asset.stat.isFile()
@@ -51,7 +134,6 @@ fetch = ($report, assets, remote) ->
       render({error: null, files: assetFiles})
     catch error
       render({error: {code: 'ENOENT'}})
-
   else
     $.ajax
       url: wiki.site(requestSite).getURL('plugin/assets/list')
@@ -65,7 +147,7 @@ emit = ($item, item) ->
     return '' if $item.parents('.page').hasClass 'remote'
     """
       <div style="background-color:#ddd;" class="progress-bar" role="progressbar"></div>
-      <center><button>upload</button></center>
+      <center><button class="upload">upload</button></center>
       <input style="display: none;" type="file" name="uploads[]" multiple="multiple">
     """
 
@@ -79,14 +161,14 @@ emit = ($item, item) ->
   assets = item.text.match(/([\w\/-]*)/)[1]
   for site in context $item
     if site.length is 64
-      siteName = site.slice(0, 6) + '..' + site.slice(-2)
+      siteName = site.slice(0,6) +  '..' + site.slice(-2)
     else
       siteName = site
     $report = $item.find('dl').prepend """
       <dt><img width=12 src="#{wiki.site(site).flag()}"> #{siteName}</dt>
       <dd style="margin:8px;"></dd>
     """
-    fetch $report.find('dd:first'), assets, site
+    fetch_list $item, item, $report.find('dd:first'), assets, site
 
 bind = ($item, item) ->
   assets = item.text.match(/([\w\/-]*)/)[1]
@@ -94,13 +176,8 @@ bind = ($item, item) ->
   $item.dblclick -> wiki.textEditor $item, item
 
   # https://coligo.io/building-ajax-file-uploader-with-node/
-  $button = $item.find 'button'
+  $button = $item.find '.upload'
   $input = $item.find 'input'
-  $progress = $item.find '.progress-bar'
-
-  ignore = (e) ->
-    e.preventDefault()
-    e.stopPropagation()
 
   $button.click (e) ->
     $input.click()
@@ -114,38 +191,9 @@ bind = ($item, item) ->
     ignore e
     upload e.originalEvent.dataTransfer?.files
 
-  # prepare asset folders hierarchy
-  prepareAssetFolder = (path) ->
-    await wiki.archive.mkdir(path)
-    .then () ->
-      return true
-    .catch (error) ->
-      if error.toString().startsWith('ParentFolderDoesntExistError')
-        nextPath = path.substring(0, path.lastIndexOf('/'))
-        await prepareAssetFolder(nextPath)
-        await prepareAssetFolder(path)
-
-
   upload = (files) ->
     return unless files?.length
-
-    assetFolder = ["/wiki/assets", assets].join('/')
-    await prepareAssetFolder(assetFolder)
-    for file in files
-      reader = new FileReader()
-
-      reader.onload = () ->
-        filePath = [assetFolder, file.name].join('/')
-        await wiki.archive.writeFile(filePath, reader.result)
-        .then () ->
-          $item.empty()
-          emit $item, item
-          bind $item, item
-        .catch (error) ->
-          console.log "Error saving asset", filePath, error
-          $progress.text "Error: #{error}"
-
-      reader.readAsArrayBuffer(file)
+    post_upload $item,item, assets, files
 
 window.plugins.assets = {emit, bind} if window?
 module.exports = {expand} if module?
